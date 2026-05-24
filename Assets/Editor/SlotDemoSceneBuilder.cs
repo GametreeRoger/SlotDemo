@@ -12,7 +12,6 @@ namespace SlotDemo.EditorTools
     public static class SlotDemoSceneBuilder
     {
         const string PicturesPath = "Assets/Images/pictures.jpg";
-        const string MachinePath = "Assets/Images/machine.jpg";
         const string MachineGenPath = "Assets/Images/machine_gen.png";
         const string SpinBtnPath = "Assets/Images/spin_btn.png";
         const string BetBtnPath = "Assets/Images/bet_btn.png";
@@ -20,6 +19,8 @@ namespace SlotDemo.EditorTools
         const string DataFolder = "Assets/Data";
         const string SymbolTablePath = "Assets/Data/SymbolTable.asset";
         const string SceneLayoutPath = "Assets/Data/SceneLayout.asset";
+        const string UiPrefabPath = "Assets/Data/SlotDemoUI.prefab";
+        const string UiSlotName = "UI_Slot";
         const string ScenePath = "Assets/Scenes/SampleScene.unity";
 
         // Widgets whose anchoredPosition/sizeDelta should be captured/applied by SceneLayout.
@@ -179,6 +180,86 @@ namespace SlotDemo.EditorTools
             Debug.Log("[SlotDemo] Rebuilt 3 reels with " + CellsPerStrip + " cells each (" + CellsVisible + " visible). Save the scene to persist.");
         }
 
+        [MenuItem("Tools/SlotDemo/Wrap UI in UI_Slot (one-time migration)")]
+        public static void MenuWrapUiSlot()
+        {
+            var canvas = Object.FindFirstObjectByType<Canvas>();
+            if (canvas == null)
+            {
+                EditorUtility.DisplayDialog("Wrap UI", "No Canvas in current scene.", "OK");
+                return;
+            }
+            var existing = FindByName(canvas.gameObject, UiSlotName);
+            if (existing != null)
+            {
+                EditorUtility.DisplayDialog("Wrap UI", $"{UiSlotName} already exists under Canvas — nothing to do.", "OK");
+                return;
+            }
+
+            // Create UI_Slot as first child of canvas, stretch to fill.
+            var uiSlot = new GameObject(UiSlotName, typeof(RectTransform));
+            uiSlot.transform.SetParent(canvas.transform, worldPositionStays: false);
+            MakeFullRectChild(uiSlot);
+            uiSlot.transform.SetAsFirstSibling();
+
+            // Move every OTHER direct child of canvas into UI_Slot.
+            int moved = 0;
+            // Snapshot children first because re-parenting mutates the order.
+            var directChildren = new List<Transform>(canvas.transform.childCount);
+            for (int i = 0; i < canvas.transform.childCount; i++)
+                directChildren.Add(canvas.transform.GetChild(i));
+            foreach (var child in directChildren)
+            {
+                if (child.gameObject == uiSlot) continue;
+                child.SetParent(uiSlot.transform, worldPositionStays: false);
+                moved++;
+            }
+
+            EditorSceneManager.MarkSceneDirty(canvas.gameObject.scene);
+            EditorUtility.DisplayDialog(
+                "Wrap UI",
+                $"Moved {moved} GameObject(s) under {UiSlotName}.\n\n" +
+                "Save the scene (Ctrl/Cmd+S), then run 'Save UI_Slot as Prefab' to make it the new Build All source.",
+                "OK");
+        }
+
+        [MenuItem("Tools/SlotDemo/Save UI_Slot as Prefab")]
+        public static void MenuSaveUiPrefab()
+        {
+            var canvas = Object.FindFirstObjectByType<Canvas>();
+            if (canvas == null)
+            {
+                EditorUtility.DisplayDialog("Save UI Prefab", "No Canvas in current scene.", "OK");
+                return;
+            }
+            var uiSlot = FindByName(canvas.gameObject, UiSlotName);
+            if (uiSlot == null)
+            {
+                EditorUtility.DisplayDialog("Save UI Prefab",
+                    $"Couldn't find a GameObject named '{UiSlotName}' under Canvas.\n\n" +
+                    "Run 'Wrap UI in UI_Slot' first (or run Build All on a fresh scene — it now creates UI_Slot automatically).",
+                    "OK");
+                return;
+            }
+
+            EnsureFolders();
+            var savedPrefab = PrefabUtility.SaveAsPrefabAssetAndConnect(uiSlot, UiPrefabPath, InteractionMode.UserAction);
+            if (savedPrefab == null)
+            {
+                EditorUtility.DisplayDialog("Save UI Prefab", "Save failed — check console for details.", "OK");
+                return;
+            }
+
+            EditorUtility.DisplayDialog(
+                "Save UI Prefab",
+                $"Saved {UiSlotName} → {UiPrefabPath}\n\n" +
+                "The scene's UI_Slot is now linked to this prefab (see the blue prefab indicator in Hierarchy).\n" +
+                "Future Build All will instantiate this prefab instead of building widgets from code.\n\n" +
+                "To update later: edit the prefab (or scene instance + 'Apply All') and re-save.",
+                "OK");
+            Debug.Log("[SlotDemo] Saved UI prefab → " + UiPrefabPath);
+        }
+
         [MenuItem("Tools/SlotDemo/Capture Scene Layout (snapshot current positions)")]
         public static void MenuCaptureLayout()
         {
@@ -192,18 +273,49 @@ namespace SlotDemo.EditorTools
             EnsureFolders();
 
             var list = new List<SceneLayout.WidgetLayout>();
+            var seen = new HashSet<string>();
+
+            // Pass 1: capture the known named widgets
             foreach (var name in LayoutWidgetNames)
             {
                 var go = FindByName(canvas.gameObject, name);
                 if (go == null) continue;
-                var rt = go.GetComponent<RectTransform>();
-                if (rt == null) continue;
-                list.Add(new SceneLayout.WidgetLayout
+                AddWidgetEntry(go, list, seen, canvas.gameObject);
+            }
+
+            // Pass 2: walk parent chain of each captured widget — pick up user-made container GameObjects
+            // (e.g. ReelGroup / OperationGroup) so Build All can recreate them on Apply.
+            int initial = list.Count;
+            for (int i = 0; i < initial; i++)
+            {
+                var widgetGO = FindByName(canvas.gameObject, list[i].name);
+                if (widgetGO == null) continue;
+                var current = widgetGO.transform.parent;
+                while (current != null && current.gameObject != canvas.gameObject)
                 {
-                    name = name,
-                    anchoredPosition = rt.anchoredPosition,
-                    sizeDelta = rt.sizeDelta,
-                });
+                    if (!seen.Contains(current.gameObject.name))
+                        AddWidgetEntry(current.gameObject, list, seen, canvas.gameObject);
+                    current = current.parent;
+                }
+            }
+
+            // Pass 3: topological sort so containers come before their children when Apply iterates.
+            list = TopologicalSort(list);
+
+            var scalerSettings = default(SceneLayout.CanvasScalerSettings);
+            var scaler = canvas.GetComponent<CanvasScaler>();
+            if (scaler != null)
+            {
+                scalerSettings = new SceneLayout.CanvasScalerSettings
+                {
+                    captured = true,
+                    uiScaleMode = scaler.uiScaleMode,
+                    referenceResolution = scaler.referenceResolution,
+                    screenMatchMode = scaler.screenMatchMode,
+                    matchWidthOrHeight = scaler.matchWidthOrHeight,
+                    scaleFactor = scaler.scaleFactor,
+                    referencePixelsPerUnit = scaler.referencePixelsPerUnit,
+                };
             }
 
             var asset = AssetDatabase.LoadAssetAtPath<SceneLayout>(SceneLayoutPath);
@@ -213,34 +325,138 @@ namespace SlotDemo.EditorTools
                 AssetDatabase.CreateAsset(asset, SceneLayoutPath);
             }
             asset.widgets = list.ToArray();
+            asset.canvasScaler = scalerSettings;
             EditorUtility.SetDirty(asset);
             AssetDatabase.SaveAssets();
 
             EditorUtility.DisplayDialog(
                 "Capture Scene Layout",
-                $"Saved {list.Count} widget positions to {SceneLayoutPath}.\n\n" +
+                $"Saved {list.Count} widget positions{(scalerSettings.captured ? " + CanvasScaler settings" : "")} to {SceneLayoutPath}.\n\n" +
                 "Future Build All will apply these instead of the code defaults. " +
                 "Delete the asset to restore defaults, or re-capture to update.",
                 "OK");
         }
 
+        static void AddWidgetEntry(GameObject go, List<SceneLayout.WidgetLayout> list, HashSet<string> seen, GameObject canvasGO)
+        {
+            var rt = go.GetComponent<RectTransform>();
+            if (rt == null) return;
+
+            string parentName = "";
+            var parentTf = rt.parent;
+            if (parentTf != null && parentTf.gameObject != canvasGO)
+                parentName = parentTf.gameObject.name;
+
+            list.Add(new SceneLayout.WidgetLayout
+            {
+                name = go.name,
+                parentName = parentName,
+                anchoredPosition = rt.anchoredPosition,
+                sizeDelta = rt.sizeDelta,
+            });
+            seen.Add(go.name);
+        }
+
+        static List<SceneLayout.WidgetLayout> TopologicalSort(List<SceneLayout.WidgetLayout> input)
+        {
+            var result = new List<SceneLayout.WidgetLayout>(input.Count);
+            var emitted = new HashSet<string>();
+            var allNames = new HashSet<string>();
+            foreach (var w in input) allNames.Add(w.name);
+
+            int safety = input.Count + 1;
+            while (result.Count < input.Count && safety-- > 0)
+            {
+                bool progress = false;
+                for (int i = 0; i < input.Count; i++)
+                {
+                    var w = input[i];
+                    if (emitted.Contains(w.name)) continue;
+                    // Emit when parent is empty, or parent already emitted, or parent isn't in our list.
+                    bool parentReady =
+                        string.IsNullOrEmpty(w.parentName) ||
+                        emitted.Contains(w.parentName) ||
+                        !allNames.Contains(w.parentName);
+                    if (parentReady)
+                    {
+                        result.Add(w);
+                        emitted.Add(w.name);
+                        progress = true;
+                    }
+                }
+                if (!progress) break;   // cycle — emit rest in original order
+            }
+            foreach (var w in input)
+                if (!emitted.Contains(w.name)) result.Add(w);
+            return result;
+        }
+
         static void ApplyLayoutOverrides(GameObject root)
         {
             var layout = AssetDatabase.LoadAssetAtPath<SceneLayout>(SceneLayoutPath);
-            if (layout == null || layout.widgets == null || layout.widgets.Length == 0) return;
+            if (layout == null) return;
 
             int applied = 0;
-            foreach (var w in layout.widgets)
+            int created = 0;
+            if (layout.widgets != null)
             {
-                var go = FindByName(root, w.name);
-                if (go == null) continue;
-                var rt = go.GetComponent<RectTransform>();
-                if (rt == null) continue;
-                rt.anchoredPosition = w.anchoredPosition;
-                rt.sizeDelta = w.sizeDelta;
-                applied++;
+                foreach (var w in layout.widgets)
+                {
+                    var go = FindByName(root, w.name);
+                    RectTransform rt;
+
+                    // Auto-create user-made container GameObjects (e.g. ReelGroup) that BuildScene didn't make.
+                    if (go == null)
+                    {
+                        go = new GameObject(w.name, typeof(RectTransform));
+                        rt = go.GetComponent<RectTransform>();
+                        rt.anchorMin = new Vector2(0.5f, 0.5f);
+                        rt.anchorMax = new Vector2(0.5f, 0.5f);
+                        rt.pivot = new Vector2(0.5f, 0.5f);
+                        rt.SetParent(root.transform, worldPositionStays: false);   // attach to canvas first so subsequent re-parent works
+                        created++;
+                    }
+                    else
+                    {
+                        rt = go.GetComponent<RectTransform>();
+                        if (rt == null) continue;
+                    }
+
+                    // Re-parent (relative to the right ancestor) before applying anchored position.
+                    Transform targetParent = root.transform;
+                    if (!string.IsNullOrEmpty(w.parentName))
+                    {
+                        var newParent = FindByName(root, w.parentName);
+                        if (newParent != null) targetParent = newParent.transform;
+                    }
+                    if (rt.parent != targetParent)
+                        rt.SetParent(targetParent, worldPositionStays: false);
+
+                    rt.anchoredPosition = w.anchoredPosition;
+                    rt.sizeDelta = w.sizeDelta;
+                    applied++;
+                }
             }
-            Debug.Log("[SlotDemo] Applied " + applied + " layout overrides from " + SceneLayoutPath);
+
+            // CanvasScaler settings (only if captured — older SceneLayout assets without this field skip cleanly)
+            bool scalerApplied = false;
+            if (layout.canvasScaler.captured)
+            {
+                var scaler = root.GetComponent<CanvasScaler>();
+                if (scaler != null)
+                {
+                    var s = layout.canvasScaler;
+                    scaler.uiScaleMode = s.uiScaleMode;
+                    scaler.referenceResolution = s.referenceResolution;
+                    scaler.screenMatchMode = s.screenMatchMode;
+                    scaler.matchWidthOrHeight = s.matchWidthOrHeight;
+                    scaler.scaleFactor = s.scaleFactor;
+                    scaler.referencePixelsPerUnit = s.referencePixelsPerUnit;
+                    scalerApplied = true;
+                }
+            }
+
+            Debug.Log($"[SlotDemo] Applied {applied} widget overrides ({created} auto-created){(scalerApplied ? " + CanvasScaler" : "")} from {SceneLayoutPath}");
         }
 
         static GameObject FindByName(GameObject root, string name)
@@ -474,32 +690,78 @@ namespace SlotDemo.EditorTools
             scaler.referenceResolution = new Vector2(MachineW, MachineH);
             scaler.matchWidthOrHeight = 0.5f;
 
-            // MachineBG — prefer the generated art if available
-            var machineSprite = AssetDatabase.LoadAssetAtPath<Sprite>(MachineGenPath)
-                                ?? AssetDatabase.LoadAssetAtPath<Sprite>(MachinePath);
-            var bgGO = NewUI("MachineBG", canvasGO.transform);
+            // SlotMachine controller (always at scene root, never inside UI prefab)
+            var controllerGO = new GameObject("SlotMachine");
+            var controller = controllerGO.AddComponent<SlotMachine>();
+            controller.table = table;
+            controller.betSteps = new[] { 1, 5, 10, 50, 100 };
+            controller.startingCredits = 1000;
+            controller.reelStopDurations = new[] { 1.4f, 1.9f, 2.4f };
+
+            // ---- Branch: prefab path vs code-build path ----
+            var uiPrefab = AssetDatabase.LoadAssetAtPath<GameObject>(UiPrefabPath);
+            if (uiPrefab != null)
+            {
+                // Prefab path: instantiate UI_Slot prefab; user's hierarchy + components preserved.
+                var uiInstance = (GameObject)PrefabUtility.InstantiatePrefab(uiPrefab);
+                uiInstance.transform.SetParent(canvasGO.transform, worldPositionStays: false);
+                MakeFullRectChild(uiInstance);
+
+                WireControllerFromInstance(controller, uiInstance);
+                ApplyCanvasScalerLayoutIfCaptured(canvasGO);
+                Debug.Log("[SlotDemo] Scene built from prefab: " + UiPrefabPath);
+            }
+            else
+            {
+                // Code-build path: create UI_Slot wrapper + all widgets inside it.
+                var uiSlot = NewUI(UiSlotName, canvasGO.transform);
+                MakeFullRectChild(uiSlot);
+
+                BuildWidgetsUnder(uiSlot.transform, table, controller);
+                ApplyLayoutOverrides(canvasGO);   // SceneLayout still applies when no prefab
+                Debug.Log("[SlotDemo] Scene built from code (no UI prefab found).");
+            }
+
+            EditorSceneManager.MarkSceneDirty(scene);
+            EditorSceneManager.SaveScene(scene);
+        }
+
+        // Make a RectTransform fill its parent (anchor-stretch on both axes).
+        static void MakeFullRectChild(GameObject go)
+        {
+            var rt = go.GetComponent<RectTransform>();
+            if (rt == null) return;
+            rt.anchorMin = Vector2.zero;
+            rt.anchorMax = Vector2.one;
+            rt.offsetMin = Vector2.zero;
+            rt.offsetMax = Vector2.zero;
+            rt.pivot = new Vector2(0.5f, 0.5f);
+        }
+
+        // Build all widgets directly under the given parent (used by the code-build path).
+        static void BuildWidgetsUnder(Transform parent, SymbolTable table, SlotMachine controller)
+        {
+            // MachineBG — uses the procedurally-generated machine art (run Tools/SlotDemo/Generate Art if missing)
+            var machineSprite = AssetDatabase.LoadAssetAtPath<Sprite>(MachineGenPath);
+            if (machineSprite == null)
+                Debug.LogWarning("[SlotDemo] " + MachineGenPath + " not found — run Tools/SlotDemo/Generate Art to create it.");
+            var bgGO = NewUI("MachineBG", parent);
             var bgImg = bgGO.AddComponent<Image>();
             bgImg.sprite = machineSprite;
             bgImg.raycastTarget = false;
             SetRect(bgGO, Vector2.zero, new Vector2(MachineW, MachineH));
 
-            // Title on the marquee (only meaningful when machine_gen.png is used; benign with machine.jpg too)
-            BuildLabel("Title", canvasGO.transform, new Vector2(0f, 335f), new Vector2(700f, 100f), "LUCKY SLOT", 64, new Color(1f, 0.95f, 0.6f));
+            BuildLabel("Title", parent, new Vector2(0f, 335f), new Vector2(700f, 100f), "LUCKY SLOT", 64, new Color(1f, 0.95f, 0.6f));
 
-            // Reels
             var reels = new Reel[3];
             float[] reelXs = { -ReelXSpacing, 0f, ReelXSpacing };
             for (int i = 0; i < 3; i++)
-            {
-                reels[i] = BuildReel("Reel" + i, canvasGO.transform, new Vector2(reelXs[i], ReelCenterY), table);
-            }
+                reels[i] = BuildReel("Reel" + i, parent, new Vector2(reelXs[i], ReelCenterY), table);
 
-            // Button sprites (generated). If missing, buttons fall back to flat-color shapes.
             var spinSprite = AssetDatabase.LoadAssetAtPath<Sprite>(SpinBtnPath);
             var betSprite = AssetDatabase.LoadAssetAtPath<Sprite>(BetBtnPath);
 
-            // BET button (left of Spin)
-            var betBtnGO = NewUI("BetButton", canvasGO.transform);
+            var betBtnGO = NewUI("BetButton", parent);
             var betImg = betBtnGO.AddComponent<Image>();
             if (betSprite != null) { betImg.sprite = betSprite; betImg.color = Color.white; }
             else { betImg.color = new Color(0.1f, 0.4f, 0.9f, 1f); }
@@ -509,8 +771,7 @@ namespace SlotDemo.EditorTools
             betBtn.targetGraphic = betImg;
             SetRect(betBtnGO, new Vector2(-220f, ControlsY), new Vector2(140f, 140f));
 
-            // Spin button
-            var spinBtnGO = NewUI("SpinButton", canvasGO.transform);
+            var spinBtnGO = NewUI("SpinButton", parent);
             var spinImg = spinBtnGO.AddComponent<Image>();
             if (spinSprite != null) { spinImg.sprite = spinSprite; spinImg.color = Color.white; }
             else { spinImg.color = new Color(0.9f, 0.45f, 0.15f, 1f); }
@@ -520,22 +781,14 @@ namespace SlotDemo.EditorTools
             spinBtn.targetGraphic = spinImg;
             SetRect(spinBtnGO, new Vector2(SpinBtnX, ControlsY), new Vector2(200f, 120f));
 
-            // Bet label (overlays Bet button)
-            var betLabel = BuildLabel("BetLabel", canvasGO.transform, new Vector2(-220f, ControlsY), new Vector2(140f, 50f), "BET 1", 30, Color.white);
+            var betLabel = BuildLabel("BetLabel", parent, new Vector2(-220f, ControlsY), new Vector2(140f, 50f), "BET 1", 30, Color.white);
+            BuildLabel("SpinLabel", parent, new Vector2(SpinBtnX, ControlsY), new Vector2(200f, 60f), "SPIN", 48, Color.white);
+            var totalWinLabel = BuildLabel("TotalWinLabel", parent, new Vector2(290f, ControlsY + 6f), new Vector2(220f, 60f), "0", 36, new Color(1f, 0.95f, 0.4f));
+            BuildLabel("TotalWinCaption", parent, new Vector2(290f, ControlsY + 40f), new Vector2(220f, 30f), "TOTAL WIN", 20, new Color(1f, 0.85f, 0.4f));
+            var creditsLabel = BuildLabel("CreditsLabel", parent, new Vector2(-365f, ControlsY + 6f), new Vector2(200f, 60f), "1000", 36, new Color(0.6f, 1f, 0.6f));
+            BuildLabel("CreditsCaption", parent, new Vector2(-365f, ControlsY + 40f), new Vector2(200f, 30f), "CREDITS", 20, new Color(0.5f, 0.9f, 0.5f));
 
-            // Spin label
-            BuildLabel("SpinLabel", canvasGO.transform, new Vector2(SpinBtnX, ControlsY), new Vector2(200f, 60f), "SPIN", 48, Color.white);
-
-            // Total Win label (right of Spin)
-            var totalWinLabel = BuildLabel("TotalWinLabel", canvasGO.transform, new Vector2(290f, ControlsY + 6f), new Vector2(220f, 60f), "0", 36, new Color(1f, 0.95f, 0.4f));
-            BuildLabel("TotalWinCaption", canvasGO.transform, new Vector2(290f, ControlsY + 40f), new Vector2(220f, 30f), "TOTAL WIN", 20, new Color(1f, 0.85f, 0.4f));
-
-            // Credits display (left side of deck, mirrors TotalWin on the right)
-            var creditsLabel = BuildLabel("CreditsLabel", canvasGO.transform, new Vector2(-365f, ControlsY + 6f), new Vector2(200f, 60f), "1000", 36, new Color(0.6f, 1f, 0.6f));
-            BuildLabel("CreditsCaption", canvasGO.transform, new Vector2(-365f, ControlsY + 40f), new Vector2(200f, 30f), "CREDITS", 20, new Color(0.5f, 0.9f, 0.5f));
-
-            // Win popup
-            var winPopupGO = NewUI("WinPopup", canvasGO.transform);
+            var winPopupGO = NewUI("WinPopup", parent);
             var cg = winPopupGO.AddComponent<CanvasGroup>();
             cg.alpha = 0f;
             cg.interactable = false;
@@ -552,50 +805,67 @@ namespace SlotDemo.EditorTools
 
             var winText = BuildLabel("WinText", winPopupGO.transform, Vector2.zero, new Vector2(600f, 200f), "WIN +0", 80, new Color(1f, 0.9f, 0.2f));
 
-            // SlotMachine controller (model + input only — no view refs)
-            var controllerGO = new GameObject("SlotMachine");
-            var controller = controllerGO.AddComponent<SlotMachine>();
-            controller.table = table;
+            // Wire SlotMachine refs
             controller.reels = reels;
             controller.spinButton = spinBtn;
             controller.betButton = betBtn;
-            controller.betSteps = new[] { 1, 5, 10, 50, 100 };
-            controller.startingCredits = 1000;
-            controller.reelStopDurations = new[] { 1.4f, 1.9f, 2.4f };
 
-            // Views subscribe to controller events. Each view sits on the GameObject of the widget it updates.
+            // Views (each on the widget's GameObject)
             var creditsView = creditsLabel.gameObject.AddComponent<SlotDemo.Views.CreditsView>();
-            creditsView.machine = controller;
-            creditsView.label = creditsLabel;
+            creditsView.machine = controller; creditsView.label = creditsLabel;
 
             var totalWinView = totalWinLabel.gameObject.AddComponent<SlotDemo.Views.TotalWinView>();
-            totalWinView.machine = controller;
-            totalWinView.label = totalWinLabel;
+            totalWinView.machine = controller; totalWinView.label = totalWinLabel;
 
             var betView = betLabel.gameObject.AddComponent<SlotDemo.Views.BetView>();
-            betView.machine = controller;
-            betView.label = betLabel;
+            betView.machine = controller; betView.label = betLabel;
 
             var spinView = spinBtnGO.AddComponent<SlotDemo.Views.SpinButtonView>();
-            spinView.machine = controller;
-            spinView.button = spinBtn;
+            spinView.machine = controller; spinView.button = spinBtn;
 
             var betBtnView = betBtnGO.AddComponent<SlotDemo.Views.BetButtonView>();
-            betBtnView.machine = controller;
-            betBtnView.button = betBtn;
+            betBtnView.machine = controller; betBtnView.button = betBtn;
 
             var popupView = winPopupGO.AddComponent<SlotDemo.Views.WinPopupView>();
-            popupView.machine = controller;
-            popupView.group = cg;
-            popupView.text = winText;
+            popupView.machine = controller; popupView.group = cg; popupView.text = winText;
+        }
 
-            // Apply user-captured layout overrides (if any). No-op when SceneLayout.asset doesn't exist.
-            ApplyLayoutOverrides(canvasGO);
+        // After instantiating UI_Slot prefab, wire SlotMachine controller and View.machine refs.
+        // ScriptableObject refs (Reel.table) and same-GameObject refs (View.label / .button / .group)
+        // survive Save/InstantiatePrefab; only refs to the controller (which lives outside the prefab) need re-binding.
+        static void WireControllerFromInstance(SlotMachine controller, GameObject uiRoot)
+        {
+            controller.reels = uiRoot.GetComponentsInChildren<Reel>(includeInactive: true);
 
-            EditorSceneManager.MarkSceneDirty(scene);
-            EditorSceneManager.SaveScene(scene);
+            var spinBtnGO = FindByName(uiRoot, "SpinButton");
+            controller.spinButton = spinBtnGO != null ? spinBtnGO.GetComponent<Button>() : null;
 
-            Debug.Log("[SlotDemo] Scene built.");
+            var betBtnGO = FindByName(uiRoot, "BetButton");
+            controller.betButton = betBtnGO != null ? betBtnGO.GetComponent<Button>() : null;
+
+            foreach (var v in uiRoot.GetComponentsInChildren<SlotDemo.Views.CreditsView>(true))    v.machine = controller;
+            foreach (var v in uiRoot.GetComponentsInChildren<SlotDemo.Views.TotalWinView>(true))   v.machine = controller;
+            foreach (var v in uiRoot.GetComponentsInChildren<SlotDemo.Views.BetView>(true))        v.machine = controller;
+            foreach (var v in uiRoot.GetComponentsInChildren<SlotDemo.Views.SpinButtonView>(true)) v.machine = controller;
+            foreach (var v in uiRoot.GetComponentsInChildren<SlotDemo.Views.BetButtonView>(true))  v.machine = controller;
+            foreach (var v in uiRoot.GetComponentsInChildren<SlotDemo.Views.WinPopupView>(true))   v.machine = controller;
+        }
+
+        // Apply only the CanvasScaler section of SceneLayout (called from prefab path so widget positions stay from prefab).
+        static void ApplyCanvasScalerLayoutIfCaptured(GameObject canvasGO)
+        {
+            var layout = AssetDatabase.LoadAssetAtPath<SceneLayout>(SceneLayoutPath);
+            if (layout == null || !layout.canvasScaler.captured) return;
+            var scaler = canvasGO.GetComponent<CanvasScaler>();
+            if (scaler == null) return;
+            var s = layout.canvasScaler;
+            scaler.uiScaleMode = s.uiScaleMode;
+            scaler.referenceResolution = s.referenceResolution;
+            scaler.screenMatchMode = s.screenMatchMode;
+            scaler.matchWidthOrHeight = s.matchWidthOrHeight;
+            scaler.scaleFactor = s.scaleFactor;
+            scaler.referencePixelsPerUnit = s.referencePixelsPerUnit;
+            Debug.Log("[SlotDemo] Applied CanvasScaler from SceneLayout (prefab path)");
         }
 
         static Reel BuildReel(string name, Transform parent, Vector2 pos, SymbolTable table)

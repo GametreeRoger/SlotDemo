@@ -1,0 +1,95 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 6b2d905352352488984701892ff26f86, type: 3}
+  m_Name: SceneLayout
+  m_EditorClassIdentifier: Assembly-CSharp-Editor::SlotDemo.EditorTools.SceneLayout
+  widgets:
+  - name: MachineBG
+    parentName: 
+    anchoredPosition: {x: 0, y: 0}
+    sizeDelta: {x: 1120, y: 898}
+  - name: Title
+    parentName: 
+    anchoredPosition: {x: 0, y: 335}
+    sizeDelta: {x: 700, y: 100}
+  - name: WinPopup
+    parentName: 
+    anchoredPosition: {x: 0, y: 80}
+    sizeDelta: {x: 600, y: 200}
+  - name: ReelGroup
+    parentName: 
+    anchoredPosition: {x: 0, y: 0}
+    sizeDelta: {x: 450, y: 450}
+  - name: OperationGroup
+    parentName: 
+    anchoredPosition: {x: 0.4091, y: -309.1098}
+    sizeDelta: {x: 865, y: 136}
+  - name: CreditsGroup
+    parentName: OperationGroup
+    anchoredPosition: {x: 122.5, y: -68}
+    sizeDelta: {x: 200, y: 90}
+  - name: TotalWinGroup
+    parentName: OperationGroup
+    anchoredPosition: {x: 732.5, y: -68}
+    sizeDelta: {x: 220, y: 90}
+  - name: Reel0
+    parentName: ReelGroup
+    anchoredPosition: {x: 75, y: -225}
+    sizeDelta: {x: 150, y: 450}
+  - name: Reel1
+    parentName: ReelGroup
+    anchoredPosition: {x: 225, y: -225}
+    sizeDelta: {x: 150, y: 450}
+  - name: Reel2
+    parentName: ReelGroup
+    anchoredPosition: {x: 375, y: -225}
+    sizeDelta: {x: 150, y: 450}
+  - name: BetButton
+    parentName: OperationGroup
+    anchoredPosition: {x: 312.5, y: -68}
+    sizeDelta: {x: 140, y: 140}
+  - name: SpinButton
+    parentName: OperationGroup
+    anchoredPosition: {x: 502.5, y: -68}
+    sizeDelta: {x: 200, y: 120}
+  - name: BetLabel
+    parentName: BetButton
+    anchoredPosition: {x: 0, y: 0}
+    sizeDelta: {x: 140, y: 50}
+  - name: SpinLabel
+    parentName: SpinButton
+    anchoredPosition: {x: 0, y: 0}
+    sizeDelta: {x: 200, y: 60}
+  - name: CreditsLabel
+    parentName: CreditsGroup
+    anchoredPosition: {x: 100, y: -30}
+    sizeDelta: {x: 200, y: 60}
+  - name: CreditsCaption
+    parentName: CreditsGroup
+    anchoredPosition: {x: 100, y: -75}
+    sizeDelta: {x: 200, y: 30}
+  - name: TotalWinLabel
+    parentName: TotalWinGroup
+    anchoredPosition: {x: 110, y: -30}
+    sizeDelta: {x: 220, y: 60}
+  - name: TotalWinCaption
+    parentName: TotalWinGroup
+    anchoredPosition: {x: 110, y: -75}
+    sizeDelta: {x: 220, y: 30}
+  canvasScaler:
+    captured: 1
+    uiScaleMode: 1
+    referenceResolution: {x: 1242, y: 2208}
+    screenMatchMode: 0
+    matchWidthOrHeight: 0.5
+    scaleFactor: 1
+    referencePixelsPerUnit: 100

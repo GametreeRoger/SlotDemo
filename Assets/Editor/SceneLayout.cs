@@ -1,4 +1,5 @@
 using UnityEngine;
+using UnityEngine.UI;
 
 namespace SlotDemo.EditorTools
 {
@@ -13,10 +14,24 @@ namespace SlotDemo.EditorTools
         public struct WidgetLayout
         {
             public string name;                  // GameObject name to find under Canvas
+            public string parentName;            // Name of parent GameObject ("" = direct child of Canvas)
             public Vector2 anchoredPosition;
             public Vector2 sizeDelta;
         }
 
+        [System.Serializable]
+        public struct CanvasScalerSettings
+        {
+            public bool captured;               // true once Capture has filled this section
+            public CanvasScaler.ScaleMode uiScaleMode;
+            public Vector2 referenceResolution;
+            public CanvasScaler.ScreenMatchMode screenMatchMode;
+            public float matchWidthOrHeight;
+            public float scaleFactor;
+            public float referencePixelsPerUnit;
+        }
+
         public WidgetLayout[] widgets;
+        public CanvasScalerSettings canvasScaler;
     }
 }

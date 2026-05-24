@@ -52,8 +52,11 @@
 ```
 Assets/
 ├── Images/
-│   ├── machine.jpg     (機台外觀)
-│   └── pictures.jpg    (Build 後切成 9 個 sprite)
+│   ├── machine_gen.png (機台外觀 — Tools/SlotDemo/Generate Art 產生)
+│   ├── spin_btn.png    (SPIN 鈕 — Generate Art)
+│   ├── bet_btn.png     (BET 鈕 — Generate Art)
+│   ├── win_popup_bg.png(中獎彈窗底 — Generate Art)
+│   └── pictures.jpg    (9 個圖樣，手動 slice 成 pictures_0..8)
 ├── Scenes/
 │   └── SampleScene.unity
 ├── Scripts/
