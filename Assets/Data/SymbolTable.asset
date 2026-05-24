@@ -1,0 +1,51 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: b5dc17eda44a24b529ebb332c219570b, type: 3}
+  m_Name: SymbolTable
+  m_EditorClassIdentifier: Assembly-CSharp::SlotDemo.SymbolTable
+  entries:
+  - symbol: 0
+    sprite: {fileID: -733483899, guid: 77679a47f5bc84f209efed570f0bb63f, type: 3}
+    weight: 10
+    multiplier: 5
+  - symbol: 1
+    sprite: {fileID: -911899065, guid: 77679a47f5bc84f209efed570f0bb63f, type: 3}
+    weight: 8
+    multiplier: 8
+  - symbol: 2
+    sprite: {fileID: -797911455, guid: 77679a47f5bc84f209efed570f0bb63f, type: 3}
+    weight: 3
+    multiplier: 25
+  - symbol: 3
+    sprite: {fileID: -1076211874, guid: 77679a47f5bc84f209efed570f0bb63f, type: 3}
+    weight: 8
+    multiplier: 8
+  - symbol: 4
+    sprite: {fileID: 1187140150, guid: 77679a47f5bc84f209efed570f0bb63f, type: 3}
+    weight: 5
+    multiplier: 15
+  - symbol: 5
+    sprite: {fileID: 1665618960, guid: 77679a47f5bc84f209efed570f0bb63f, type: 3}
+    weight: 8
+    multiplier: 8
+  - symbol: 6
+    sprite: {fileID: -5240669229454746658, guid: 77679a47f5bc84f209efed570f0bb63f, type: 3}
+    weight: 1
+    multiplier: 100
+  - symbol: 7
+    sprite: {fileID: -894930647, guid: 77679a47f5bc84f209efed570f0bb63f, type: 3}
+    weight: 10
+    multiplier: 5
+  - symbol: 8
+    sprite: {fileID: -1180762555, guid: 77679a47f5bc84f209efed570f0bb63f, type: 3}
+    weight: 2
+    multiplier: 50
