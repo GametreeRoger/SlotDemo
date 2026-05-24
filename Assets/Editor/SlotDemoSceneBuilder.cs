@@ -19,7 +19,19 @@ namespace SlotDemo.EditorTools
         const string WinPopupBgPath = "Assets/Images/win_popup_bg.png";
         const string DataFolder = "Assets/Data";
         const string SymbolTablePath = "Assets/Data/SymbolTable.asset";
+        const string SceneLayoutPath = "Assets/Data/SceneLayout.asset";
         const string ScenePath = "Assets/Scenes/SampleScene.unity";
+
+        // Widgets whose anchoredPosition/sizeDelta should be captured/applied by SceneLayout.
+        static readonly string[] LayoutWidgetNames = {
+            "MachineBG", "Title",
+            "Reel0", "Reel1", "Reel2",
+            "BetButton", "SpinButton",
+            "BetLabel", "SpinLabel",
+            "CreditsLabel", "CreditsCaption",
+            "TotalWinLabel", "TotalWinCaption",
+            "WinPopup",
+        };
 
         const float MachineW = 1120f;
         const float MachineH = 898f;
@@ -165,6 +177,82 @@ namespace SlotDemo.EditorTools
             EditorUtility.SetDirty(slot);
             UnityEditor.SceneManagement.EditorSceneManager.MarkSceneDirty(slot.gameObject.scene);
             Debug.Log("[SlotDemo] Rebuilt 3 reels with " + CellsPerStrip + " cells each (" + CellsVisible + " visible). Save the scene to persist.");
+        }
+
+        [MenuItem("Tools/SlotDemo/Capture Scene Layout (snapshot current positions)")]
+        public static void MenuCaptureLayout()
+        {
+            var canvas = Object.FindFirstObjectByType<Canvas>();
+            if (canvas == null)
+            {
+                EditorUtility.DisplayDialog("Capture Scene Layout", "No Canvas in current scene.", "OK");
+                return;
+            }
+
+            EnsureFolders();
+
+            var list = new List<SceneLayout.WidgetLayout>();
+            foreach (var name in LayoutWidgetNames)
+            {
+                var go = FindByName(canvas.gameObject, name);
+                if (go == null) continue;
+                var rt = go.GetComponent<RectTransform>();
+                if (rt == null) continue;
+                list.Add(new SceneLayout.WidgetLayout
+                {
+                    name = name,
+                    anchoredPosition = rt.anchoredPosition,
+                    sizeDelta = rt.sizeDelta,
+                });
+            }
+
+            var asset = AssetDatabase.LoadAssetAtPath<SceneLayout>(SceneLayoutPath);
+            if (asset == null)
+            {
+                asset = ScriptableObject.CreateInstance<SceneLayout>();
+                AssetDatabase.CreateAsset(asset, SceneLayoutPath);
+            }
+            asset.widgets = list.ToArray();
+            EditorUtility.SetDirty(asset);
+            AssetDatabase.SaveAssets();
+
+            EditorUtility.DisplayDialog(
+                "Capture Scene Layout",
+                $"Saved {list.Count} widget positions to {SceneLayoutPath}.\n\n" +
+                "Future Build All will apply these instead of the code defaults. " +
+                "Delete the asset to restore defaults, or re-capture to update.",
+                "OK");
+        }
+
+        static void ApplyLayoutOverrides(GameObject root)
+        {
+            var layout = AssetDatabase.LoadAssetAtPath<SceneLayout>(SceneLayoutPath);
+            if (layout == null || layout.widgets == null || layout.widgets.Length == 0) return;
+
+            int applied = 0;
+            foreach (var w in layout.widgets)
+            {
+                var go = FindByName(root, w.name);
+                if (go == null) continue;
+                var rt = go.GetComponent<RectTransform>();
+                if (rt == null) continue;
+                rt.anchoredPosition = w.anchoredPosition;
+                rt.sizeDelta = w.sizeDelta;
+                applied++;
+            }
+            Debug.Log("[SlotDemo] Applied " + applied + " layout overrides from " + SceneLayoutPath);
+        }
+
+        static GameObject FindByName(GameObject root, string name)
+        {
+            if (root.name == name) return root;
+            for (int i = 0; i < root.transform.childCount; i++)
+            {
+                var child = root.transform.GetChild(i).gameObject;
+                var found = FindByName(child, name);
+                if (found != null) return found;
+            }
+            return null;
         }
 
         [MenuItem("Tools/SlotDemo/Wire Views Only (non-destructive)")]
@@ -500,6 +588,9 @@ namespace SlotDemo.EditorTools
             popupView.machine = controller;
             popupView.group = cg;
             popupView.text = winText;
+
+            // Apply user-captured layout overrides (if any). No-op when SceneLayout.asset doesn't exist.
+            ApplyLayoutOverrides(canvasGO);
 
             EditorSceneManager.MarkSceneDirty(scene);
             EditorSceneManager.SaveScene(scene);
