@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.UI;
 using SlotDemo.WinEvaluation;
@@ -26,11 +27,19 @@ namespace SlotDemo
         int betIndex;
         int credits;
         int totalWin;
-        SlotSymbol[] currentFinals;
         int pendingWinAmount;
 
-        // Strategy: pluggable scoring rule. Defaults to single-payline; swap with SetEvaluator().
+        // Strategy: pluggable scoring rule. Defaults to 5-line (3 rows + 2 diagonals); swap with SetEvaluator().
         IWinEvaluator evaluator;
+
+        // Cached 3×N grid of visible symbols built after each spin; reused to avoid per-spin alloc.
+        SlotSymbol[,] visibleGrid;
+        const int VisibleRows = 3;
+
+        // Win highlight buffers (reused per spin to avoid GC).
+        List<Vector2Int[]> hitLinesBuffer;
+        bool[,] cellsToHighlight;
+        const float HighlightDuration = 1.6f;   // matches WinPopup fade-in + hold + fade-out total
 
         // ─── Observer: events broadcast model changes; Views subscribe ───
         public event System.Action<int> CreditsChanged;
@@ -53,8 +62,11 @@ namespace SlotDemo
 
         void Awake()
         {
-            currentFinals = new SlotSymbol[reels != null ? reels.Length : 0];
-            if (evaluator == null) evaluator = new SinglePaylineEvaluator();
+            int reelCount = reels != null ? reels.Length : 0;
+            visibleGrid = new SlotSymbol[VisibleRows, reelCount];
+            hitLinesBuffer = new List<Vector2Int[]>(8);
+            cellsToHighlight = new bool[VisibleRows, reelCount];
+            if (evaluator == null) evaluator = MultiPaylineFactory.FiveLine3x3();
             betIndex = 0;
             credits = startingCredits;
             totalWin = 0;
@@ -112,11 +124,10 @@ namespace SlotDemo
             credits -= CurrentBet;
             CreditsChanged?.Invoke(credits);
 
-            for (int i = 0; i < reels.Length; i++) currentFinals[i] = table.WeightedRandom();
             for (int i = 0; i < reels.Length; i++)
             {
                 float duration = i < reelStopDurations.Length ? reelStopDurations[i] : 2f + i * 0.5f;
-                reels[i].StartSpin(currentFinals[i], duration);
+                reels[i].StartSpin(table.WeightedRandom(), duration);
             }
         }
 
@@ -131,9 +142,18 @@ namespace SlotDemo
 
         void ResolveSpin()
         {
-            pendingWinAmount = evaluator.Evaluate(currentFinals, table, CurrentBet);
+            // Fill the cached 3×N grid: top / center / bottom visible cells per reel.
+            for (int c = 0; c < reels.Length; c++)
+            {
+                visibleGrid[0, c] = reels[c].GetVisibleSymbol(-1);
+                visibleGrid[1, c] = reels[c].GetVisibleSymbol( 0);
+                visibleGrid[2, c] = reels[c].GetVisibleSymbol(+1);
+            }
+
+            pendingWinAmount = evaluator.Evaluate(visibleGrid, table, CurrentBet, hitLinesBuffer);
             if (pendingWinAmount > 0)
             {
+                TriggerCellGlows();
                 credits += pendingWinAmount;
                 totalWin += pendingWinAmount;
                 CreditsChanged?.Invoke(credits);
@@ -143,6 +163,36 @@ namespace SlotDemo
             else
             {
                 ChangeState(GameState.Idle);
+            }
+        }
+
+        // Take the buffer of winning lines, mark a de-duped set of cells, and tell each reel to pulse its hit cells.
+        void TriggerCellGlows()
+        {
+            for (int r = 0; r < VisibleRows; r++)
+                for (int c = 0; c < reels.Length; c++)
+                    cellsToHighlight[r, c] = false;
+
+            for (int i = 0; i < hitLinesBuffer.Count; i++)
+            {
+                var line = hitLinesBuffer[i];
+                if (line == null) continue;
+                for (int j = 0; j < line.Length; j++)
+                {
+                    var p = line[j];
+                    if ((uint)p.x < (uint)VisibleRows && (uint)p.y < (uint)reels.Length)
+                        cellsToHighlight[p.x, p.y] = true;
+                }
+            }
+
+            for (int c = 0; c < reels.Length; c++)
+            {
+                for (int r = 0; r < VisibleRows; r++)
+                {
+                    if (!cellsToHighlight[r, c]) continue;
+                    int rowOffset = r - 1;   // row 0 = top → -1, row 1 = center → 0, row 2 = bottom → +1
+                    reels[c].HighlightCell(rowOffset, HighlightDuration);
+                }
             }
         }
 

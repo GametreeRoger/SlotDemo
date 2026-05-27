@@ -1,3 +1,4 @@
+using System.Collections;
 using UnityEngine;
 using UnityEngine.UI;
 
@@ -34,16 +35,109 @@ namespace SlotDemo
         float settleStartY;
         float settleElapsed;
 
+        // Parallel to cells[] — tracks SlotSymbol per cell so the evaluator can read the visible row.
+        SlotSymbol[] cellSymbols;
+
+        // Parallel to cells[] — gold glow overlay child Image used for win highlight. Auto-created in Awake.
+        Image[] cellGlowOverlays;
+        static readonly Color GlowColorBase = new Color(1f, 0.95f, 0.5f);   // gold
+        const float GlowMaxAlpha = 0.75f;
+        const float GlowPulseCycle = 0.5f;
+
         public bool IsSpinning => state != ReelState.Idle;
         public ReelState State => state;
 
+        // rowOffset: -1 = top visible cell, 0 = center (payline), +1 = bottom visible cell.
+        public SlotSymbol GetVisibleSymbol(int rowOffset)
+        {
+            if (cellSymbols == null || cellSymbols.Length == 0) return default;
+            int center = cells.Length / 2;
+            int idx = center + rowOffset;
+            if ((uint)idx >= (uint)cellSymbols.Length) return default;
+            return cellSymbols[idx];
+        }
+
+        void EnsureCellSymbolsArray()
+        {
+            if (cells == null) return;
+            if (cellSymbols == null || cellSymbols.Length != cells.Length)
+                cellSymbols = new SlotSymbol[cells.Length];
+        }
+
+        // Auto-create a transparent gold overlay Image as a child of each cell.
+        // Idempotent: re-uses any existing "Glow" child to support manually-prepared prefabs.
+        void EnsureGlowOverlays()
+        {
+            if (cells == null) return;
+            if (cellGlowOverlays != null && cellGlowOverlays.Length == cells.Length) return;
+
+            cellGlowOverlays = new Image[cells.Length];
+            for (int i = 0; i < cells.Length; i++)
+            {
+                var cell = cells[i];
+                if (cell == null) continue;
+                var existing = cell.transform.Find("Glow");
+                Image img;
+                if (existing != null)
+                {
+                    img = existing.GetComponent<Image>();
+                    if (img == null) img = existing.gameObject.AddComponent<Image>();
+                }
+                else
+                {
+                    var go = new GameObject("Glow", typeof(RectTransform), typeof(Image));
+                    go.transform.SetParent(cell.transform, worldPositionStays: false);
+                    var rt = go.GetComponent<RectTransform>();
+                    rt.anchorMin = Vector2.zero;
+                    rt.anchorMax = Vector2.one;
+                    rt.offsetMin = Vector2.zero;
+                    rt.offsetMax = Vector2.zero;
+                    img = go.GetComponent<Image>();
+                }
+                img.color = new Color(GlowColorBase.r, GlowColorBase.g, GlowColorBase.b, 0f);
+                img.raycastTarget = false;
+                cellGlowOverlays[i] = img;
+            }
+        }
+
+        // rowOffset: -1 = top visible cell, 0 = center, +1 = bottom visible.
+        public void HighlightCell(int rowOffset, float duration)
+        {
+            EnsureGlowOverlays();
+            if (cells == null || cellGlowOverlays == null) return;
+            int center = cells.Length / 2;
+            int idx = center + rowOffset;
+            if ((uint)idx >= (uint)cellGlowOverlays.Length) return;
+            var img = cellGlowOverlays[idx];
+            if (img == null) return;
+            StartCoroutine(PulseGlow(img, duration));
+        }
+
+        IEnumerator PulseGlow(Image img, float duration)
+        {
+            float elapsed = 0f;
+            while (elapsed < duration)
+            {
+                float t = (elapsed % GlowPulseCycle) / GlowPulseCycle;
+                float pulse = Mathf.Sin(t * Mathf.PI);   // 0 → 1 → 0
+                img.color = new Color(GlowColorBase.r, GlowColorBase.g, GlowColorBase.b, pulse * GlowMaxAlpha);
+                elapsed += Time.deltaTime;
+                yield return null;
+            }
+            img.color = new Color(GlowColorBase.r, GlowColorBase.g, GlowColorBase.b, 0f);
+        }
+
         void Awake()
         {
+            EnsureCellSymbolsArray();
+            EnsureGlowOverlays();
             if (cells != null && cells.Length > 0 && table != null)
             {
                 for (int i = 0; i < cells.Length; i++)
                 {
-                    cells[i].sprite = table.GetSprite(table.WeightedRandom());
+                    var s = table.WeightedRandom();
+                    cellSymbols[i] = s;
+                    cells[i].sprite = table.GetSprite(s);
                 }
             }
         }
@@ -51,6 +145,7 @@ namespace SlotDemo
         public void StartSpin(SlotSymbol finalSymbol, float spinDuration)
         {
             if (state != ReelState.Idle) return;
+            EnsureCellSymbolsArray();
 
             pendingFinal = finalSymbol;
             pendingDuration = Mathf.Max(0.01f, spinDuration);
@@ -125,15 +220,14 @@ namespace SlotDemo
                 for (int i = cells.Length - 1; i > 0; i--)
                 {
                     cells[i].sprite = cells[i - 1].sprite;
+                    cellSymbols[i] = cellSymbols[i - 1];
                 }
-                if (shiftsRemaining == targetSetShift)
-                {
-                    cells[0].sprite = table.GetSprite(pendingFinal);
-                }
-                else
-                {
-                    cells[0].sprite = table.GetSprite(table.WeightedRandom());
-                }
+                SlotSymbol newSym = (shiftsRemaining == targetSetShift)
+                    ? pendingFinal
+                    : table.WeightedRandom();
+                cells[0].sprite = table.GetSprite(newSym);
+                cellSymbols[0] = newSym;
+
                 p.y += cellHeight;
                 shiftsRemaining--;
             }
